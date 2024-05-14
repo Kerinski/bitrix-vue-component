@@ -20,17 +20,11 @@ class Vue
      * @param array $addFiles
      * @throws Exception
      */
-    public static function includeComponent($componentName, array $addFiles = [])
+    public static function includeComponent($componentName, $innerPath = '', array $addFiles = [])
     {
         if (self::$init !== true) {
             System::checkBitrix();
             self::$init = true;
-
-            // Подключаем Vue.js и Vuex
-            if (defined('DBOGDANOFF_ADD_JS') && DBOGDANOFF_ADD_JS === true) {
-                Asset::getInstance()->addJs('https://unpkg.com/vuex@3.5.1/dist/vuex' . (!defined('DBOGDANOFF_DEV') ? '.min' : '') . '.js');
-                Asset::getInstance()->addJs('https://unpkg.com/vue@2.6.11/dist/vue' . (!defined('DBOGDANOFF_DEV') ? '.min' : '') . '.js');
-            }
 
             \AddEventHandler('main', 'OnEndBufferContent', ['\Dbogdanoff\Bitrix\Vue', 'insertComponents']);
         }
@@ -44,7 +38,6 @@ class Vue
 
             $docPath = self::getComponentsPath();
             $rootPath = $_SERVER['DOCUMENT_ROOT'] . $docPath;
-
             // Подключает зависимости скрипты/стили
             if (file_exists($settings = $rootPath . '/' . $name . '/.settings.php')) {
                 $settings = require_once $settings;
@@ -60,8 +53,31 @@ class Vue
                 self::addFile($file);
             }
 
-            if (file_exists($template = $rootPath . '/' . $name . '/template.vue')) {
-                self::$arHtml[] = file_get_contents($template);
+            $files = scandir($rootPath . '/' . $name);
+            foreach ($files as $file) {
+                $fileInfo = pathinfo($file);
+                if ($fileInfo['extension'] === "vue") {
+                    $fileTemplate = file_get_contents($rootPath . '/' . $name . '/' . $file);
+                    $tplElementPosStart = strpos($fileTemplate, '<template id="') + 14;
+                    $tplElementPosEnd = strpos($fileTemplate, '"', $tplElementPosStart);
+                    $templateId = substr($fileTemplate, $tplElementPosStart, $tplElementPosEnd - $tplElementPosStart);
+                    $fileTemplate = str_replace('export default {', '', $fileTemplate);
+                    $fileTemplate = str_replace("<script>",
+                        "<script>BX.Vue.component('" . $templateId . "', {'template': '#" . $templateId . "',",
+                        $fileTemplate);
+                    if (strpos($fileTemplate, '<style scoped')) {
+                        $scopeClass = 'scope-' . uniqid();
+                        $tplElementPosEndQuote = strpos($fileTemplate, '>', $tplElementPosStart);
+                        $fileTemplate = substr_replace($fileTemplate, '<div class="' . $scopeClass . '">',
+                            $tplElementPosEndQuote + 1, 0);
+                        $fileTemplate = str_replace('</template>', '</div></template>', $fileTemplate);
+                        $fileTemplate = str_replace('<style scoped>',
+                            '<style scoped>@scope (.' . $scopeClass . ') {', $fileTemplate);
+                        $fileTemplate = str_replace('</style>', '}</style>', $fileTemplate);
+                    }
+                    $fileTemplate = str_replace("</script>", ")</script>", $fileTemplate);
+                    self::$arHtml[] = $fileTemplate;
+                }
             }
 
             if (!defined('DBOGDANOFF_DEV') && file_exists($rootPath . '/' . $name . '/script.min.js')) {
@@ -79,6 +95,82 @@ class Vue
             } elseif (file_exists($rootPath . '/' . $name . '/style.min.css')) {
                 self::addFile($docPath . '/' . $name . '/style.min.css');
             }
+        }
+    }
+
+    public static function includeComponentByPath($componentName, $componentPath, array $addFiles = [])
+    {
+        if (self::$init !== true) {
+            System::checkBitrix();
+            self::$init = true;
+
+            \AddEventHandler('main', 'OnEndBufferContent', ['\Dbogdanoff\Bitrix\Vue', 'insertComponents']);
+        }
+
+
+        if (self::$arIncluded[$componentName] === true) {
+            exit;
+        }
+
+        self::$arIncluded[$componentName] = true;
+
+        $rootPath = $componentPath;
+        // Подключает зависимости скрипты/стили
+        if (file_exists($settings = $rootPath . '/.settings.php')) {
+            $settings = require_once $settings;
+            if (array_key_exists('require', $settings)) {
+                foreach ((array)$settings['require'] as $file) {
+                    self::addFile($file);
+                }
+            }
+        }
+
+        // Подключает доп. зависимости скрипты/стили
+        foreach ($addFiles as $file) {
+            self::addFile($file);
+        }
+
+        $files = scandir($rootPath);
+        foreach ($files as $file) {
+            $fileInfo = pathinfo($file);
+            if ($fileInfo['extension'] === "vue") {
+                $fileTemplate = file_get_contents($rootPath . '/' . $file);
+                $tplElementPosStart = strpos($fileTemplate, '<template id="') + 14;
+                $tplElementPosEnd = strpos($fileTemplate, '"', $tplElementPosStart);
+                $templateId = substr($fileTemplate, $tplElementPosStart, $tplElementPosEnd - $tplElementPosStart);
+                $fileTemplate = str_replace('export default {', '', $fileTemplate);
+                $fileTemplate = str_replace("<script>",
+                    "<script>BX.Vue.component('" . $templateId . "', {'template': '#" . $templateId . "',",
+                    $fileTemplate);
+                if (strpos($fileTemplate, '<style scoped')) {
+                    $scopeClass = 'scope-' . uniqid();
+                    $tplElementPosEndQuote = strpos($fileTemplate, '>', $tplElementPosStart);
+                    $fileTemplate = substr_replace($fileTemplate, '<div class="' . $scopeClass . '">',
+                        $tplElementPosEndQuote + 1, 0);
+                    $fileTemplate = str_replace('</template>', '</div></template>', $fileTemplate);
+                    $fileTemplate = str_replace('<style scoped>',
+                        '<style scoped>@scope (.' . $scopeClass . ') {', $fileTemplate);
+                    $fileTemplate = str_replace('</style>', '}</style>', $fileTemplate);
+                }
+                $fileTemplate = str_replace("</script>", ")</script>", $fileTemplate);
+                self::$arHtml[] = $fileTemplate;
+            }
+        }
+
+        if (!defined('DBOGDANOFF_DEV') && file_exists($rootPath . '/script.min.js')) {
+            self::addFile($docPath . '/' . $name . '/script.min.js');
+        } elseif (file_exists($rootPath  . '/script.js')) {
+            self::addFile($docPath  . '/script.js');
+        } elseif (file_exists($rootPath  . '/script.min.js')) {
+            self::addFile($docPath  . '/script.min.js');
+        }
+
+        if (!defined('DBOGDANOFF_DEV') && file_exists($rootPath  . '/style.min.css')) {
+            self::addFile($docPath . '/' . $name . '/style.min.css');
+        } elseif (file_exists($rootPath . '/style.css')) {
+            self::addFile($docPath  . '/style.css');
+        } elseif (file_exists($rootPath . '/style.min.css')) {
+            self::addFile($docPath  . '/style.min.css');
         }
     }
 
@@ -110,7 +202,6 @@ class Vue
     {
         $include = "<div style='display:none'>";
         $include .= implode("\n", self::$arHtml);
-        $include .= self::getGlobalJsConfig();
         $include .= "</div>";
         $content = preg_replace('/<body([^>]*)?>/', "<body$1>" . $include, $content, 1);
         if (
@@ -127,23 +218,6 @@ class Vue
     }
 
     /**
-     * Инициализирует глобальные настройки, доступные в компонентах this.$bx
-     * @return string
-     */
-    public static function getGlobalJsConfig(): string
-    {
-        $script = '<script>';
-        $script .= 'Vue.prototype.$bx=';
-        $script .= json_encode([
-            'componentsPath' => self::getComponentsPath(),
-            'siteTemplatePath' => SITE_TEMPLATE_PATH
-        ]);
-        $script .= '</script>';
-
-        return $script;
-    }
-
-    /**
      * Путь к директории с компонентами
      * @return string
      */
@@ -154,5 +228,28 @@ class Vue
         }
 
         return self::COMPONENTS_PATH;
+    }
+
+    public static function includeAllComponentFromPath($componentsRootPath = '')
+    {
+        $directory = '';
+        if (!$componentsRootPath) {
+            $directory = $_SERVER['DOCUMENT_ROOT'] . self::getComponentsPath();
+        } else {
+            $directory = $componentsRootPath;
+        }
+        $dirs = scandir($directory);
+        foreach ($dirs as $key => $value) {
+            if ($value != "." && $value != "..") {
+                $path = realpath($directory . DIRECTORY_SEPARATOR . $value);
+                if (is_dir($path)) {
+                    if (count(glob($path . DIRECTORY_SEPARATOR . '*.vue')) > 0) {
+                        self::includeComponentByPath($value, $directory . DIRECTORY_SEPARATOR . $value);
+                    } else {
+                        self::includeAllComponentFromPath($directory. DIRECTORY_SEPARATOR . $value);
+                    }
+                }
+            }
+        }
     }
 }
